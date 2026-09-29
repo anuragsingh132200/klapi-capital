@@ -33,6 +33,7 @@ class HttpBrokerAdapter(BrokerAdapter):
         super().__init__(credentials, timeout)
         self._client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
         self._live_enabled = bool(credentials.get("_live_trading_enabled", False))
+        self._instrument_cache: dict[str, str] = {}
 
     async def _request(
         self,
@@ -68,6 +69,24 @@ class HttpBrokerAdapter(BrokerAdapter):
         if not isinstance(data, dict):
             raise BrokerError("Broker returned an unexpected response")
         return data
+
+    async def _request_list(self, url: str) -> list[dict[str, Any]]:
+        """Fetch a public instrument master whose top-level JSON value is a list."""
+        try:
+            response = await self._client.get(url)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise BrokerTransientError(f"Instrument master request failed: {exc}") from exc
+        if response.status_code == 429:
+            raise BrokerRateLimitError("Instrument master rate limit exceeded")
+        if response.status_code >= 400:
+            raise BrokerError(f"Instrument master request failed ({response.status_code})")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise BrokerError("Instrument master returned invalid JSON") from exc
+        if not isinstance(data, list):
+            raise BrokerError("Instrument master returned an unexpected response")
+        return [item for item in data if isinstance(item, dict)]
 
     def _assert_live_enabled(self) -> None:
         if not self._live_enabled:
@@ -248,9 +267,29 @@ class AngelOneAdapter(HttpBrokerAdapter):
             for item in (data.get("data") or [])
         ]
 
-    def _symbol_token(self, order: PlannedOrder) -> str:
+    async def _symbol_token(self, order: PlannedOrder) -> str:
         tokens = self.credentials.get("instrument_tokens", {})
         token = tokens.get(f"{order.exchange}:{order.symbol}") or tokens.get(order.symbol)
+        cache_key = f"{order.exchange}:{order.symbol}"
+        token = token or self._instrument_cache.get(cache_key)
+        if not token:
+            instruments = await self._request_list(
+                "https://margincalculator.angelone.in/OpenAPI_File/files/"
+                "OpenAPIScripMaster.json"
+            )
+            match = next(
+                (
+                    item
+                    for item in instruments
+                    if str(item.get("symbol", "")).removesuffix("-EQ").upper()
+                    == order.symbol.upper()
+                    and str(item.get("exch_seg", "")).upper() == order.exchange.upper()
+                ),
+                None,
+            )
+            if match:
+                token = str(match["token"])
+                self._instrument_cache[cache_key] = token
         if not token:
             raise BrokerError(
                 f"Angel One instrument token missing for {order.exchange}:{order.symbol}"
@@ -266,7 +305,7 @@ class AngelOneAdapter(HttpBrokerAdapter):
             json={
                 "variety": "NORMAL",
                 "tradingsymbol": f"{order.symbol}-EQ",
-                "symboltoken": self._symbol_token(order),
+                "symboltoken": await self._symbol_token(order),
                 "transactiontype": order.side.value,
                 "exchange": order.exchange,
                 "ordertype": "MARKET",
@@ -399,11 +438,42 @@ class UpstoxAdapter(HttpBrokerAdapter):
             for item in data.get("data", [])
         ]
 
-    def _instrument_key(self, order: PlannedOrder) -> str:
+    async def _instrument_key(self, order: PlannedOrder) -> str:
         instruments = self.credentials.get("instrument_keys", {})
         value = instruments.get(f"{order.exchange}:{order.symbol}") or instruments.get(
             order.symbol
         )
+        cache_key = f"{order.exchange}:{order.symbol}"
+        value = value or self._instrument_cache.get(cache_key)
+        if not value:
+            data = await self._request(
+                "GET",
+                "/v2/instruments/search",
+                headers=self.headers,
+                params={
+                    "query": order.symbol,
+                    "exchanges": order.exchange,
+                    "segments": "EQ",
+                    "page_number": 1,
+                    "page_size": 20,
+                },
+            )
+            items = data.get("data", [])
+            if isinstance(items, dict):
+                items = items.get("instruments", [])
+            match = next(
+                (
+                    item
+                    for item in items
+                    if str(item.get("trading_symbol", "")).upper() == order.symbol.upper()
+                    and str(item.get("exchange", "")).upper() == order.exchange.upper()
+                    and str(item.get("instrument_type", "EQ")).upper() == "EQ"
+                ),
+                None,
+            )
+            if match:
+                value = str(match["instrument_key"])
+                self._instrument_cache[cache_key] = value
         if not value:
             raise BrokerError(
                 f"Upstox instrument key missing for {order.exchange}:{order.symbol}"
@@ -422,7 +492,7 @@ class UpstoxAdapter(HttpBrokerAdapter):
                 "validity": "DAY",
                 "price": 0,
                 "tag": (order.client_order_id or "")[:40],
-                "instrument_token": self._instrument_key(order),
+                "instrument_token": await self._instrument_key(order),
                 "order_type": "MARKET",
                 "transaction_type": order.side.value,
                 "disclosed_quantity": 0,

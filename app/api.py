@@ -4,19 +4,99 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 
-from app.brokers.base import BrokerAuthenticationError, BrokerError
+from app.brokers.base import BrokerAuthenticationError, BrokerError, BrokerRateLimitError
 from app.brokers.factory import BrokerNotConnectedError
 from app.domain import (
+    BrokerAuthStartRequest,
+    BrokerAuthStartResponse,
     BrokerConnectionRequest,
     BrokerConnectionResponse,
     BrokerName,
     ExecutionRequest,
     ExecutionResult,
+    GrowwTokenRequest,
 )
 from app.engine import DuplicateExecutionInProgress
 from app.planner import PlanningError
 
 router = APIRouter(prefix="/api/v1")
+
+
+@router.post(
+    "/brokers/{broker}/auth/start",
+    response_model=BrokerAuthStartResponse,
+    tags=["broker authentication"],
+)
+async def start_broker_auth(
+    broker: BrokerName, payload: BrokerAuthStartRequest, request: Request
+) -> BrokerAuthStartResponse:
+    try:
+        return request.app.state.broker_auth.start(broker, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+
+@router.get(
+    "/brokers/{broker}/auth/callback",
+    response_model=BrokerConnectionResponse,
+    tags=["broker authentication"],
+)
+async def broker_auth_callback(
+    broker: BrokerName,
+    request: Request,
+    state: str,
+    code: str | None = None,
+    request_token: str | None = None,
+    auth_token: str | None = None,
+    feed_token: str | None = None,
+) -> BrokerConnectionResponse:
+    try:
+        credentials = await request.app.state.broker_auth.exchange_callback(
+            broker,
+            state=state,
+            code=code,
+            request_token=request_token,
+            auth_token=auth_token,
+            feed_token=feed_token,
+        )
+        await request.app.state.broker_factory.connect(broker, credentials, validate=True)
+    except BrokerAuthenticationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except BrokerRateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+    except BrokerError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return BrokerConnectionResponse(
+        broker=broker, connected=True, message="Broker authentication completed"
+    )
+
+
+@router.post(
+    "/brokers/groww/auth/token",
+    response_model=BrokerConnectionResponse,
+    tags=["broker authentication"],
+)
+async def generate_groww_token(
+    payload: GrowwTokenRequest, request: Request
+) -> BrokerConnectionResponse:
+    try:
+        credentials = await request.app.state.broker_auth.generate_groww_token(payload)
+        await request.app.state.broker_factory.connect(
+            BrokerName.GROWW, credentials, validate=True
+        )
+    except BrokerAuthenticationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except BrokerRateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+    except BrokerError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return BrokerConnectionResponse(
+        broker=BrokerName.GROWW,
+        connected=True,
+        message="Groww authentication completed",
+    )
 
 
 @router.get("/brokers", tags=["brokers"])
@@ -129,4 +209,3 @@ async def list_executions(
     request: Request, limit: Annotated[int, Query(ge=1, le=100)] = 20
 ) -> list[ExecutionResult]:
     return request.app.state.database.list_executions(limit)
-

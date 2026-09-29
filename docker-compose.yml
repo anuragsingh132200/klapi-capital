@@ -8,11 +8,10 @@ services:
         required: false
     environment:
       DATABASE_PATH: /data/kalpi.db
-      ENABLE_LIVE_TRADING: "false"
+      ENABLE_LIVE_TRADING: "${ENABLE_LIVE_TRADING:-false}"
     volumes:
       - kalpi_data:/data
     restart: unless-stopped
 
 volumes:
   kalpi_data:
-

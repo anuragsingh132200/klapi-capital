@@ -137,9 +137,9 @@ and one registry entry in `app/brokers/factory.py`; planner and engine code rema
 |---|---|---|
 | Zerodha | `api_key`, `access_token` | trading symbol |
 | FYERS | `client_id`, `access_token` | trading symbol |
-| Angel One | `api_key`, `access_token`, optional IP/MAC fields | `instrument_tokens` map |
+| Angel One | `api_key`, `access_token`, optional IP/MAC fields | resolved from the daily master; optional override map |
 | Groww | `access_token` | trading symbol |
-| Upstox | `access_token` | `instrument_keys` map |
+| Upstox | `access_token` | resolved with instrument search; optional override map |
 
 Example connection body:
 
@@ -153,11 +153,44 @@ Example connection body:
 }
 ```
 
-The endpoint accepts an already-issued broker session rather than collecting a customer's
-password or TOTP. This is intentional: login and consent should remain on the broker's page.
-In a consumer product, an OAuth callback service would exchange the authorization code and
-pass the resulting session into the same adapter factory. Angel One deployments also need
-the broker's currently required network identity/static-IP setup.
+### Broker authentication
+
+Zerodha, FYERS, Angel One, and Upstox use broker-hosted login. Register this application's
+callback URL in the broker developer console, replacing `{broker}` with its lowercase name:
+
+```text
+https://your-host/api/v1/brokers/{broker}/auth/callback
+```
+
+Start authentication server-side:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/brokers/upstox/auth/start \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "api_key":"your-app-key",
+    "api_secret":"your-app-secret",
+    "redirect_uri":"https://your-host/api/v1/brokers/upstox/auth/callback"
+  }'
+```
+
+Open the returned `authorization_url`. The callback validates a random, single-use,
+10-minute CSRF state, exchanges the broker's authorization code, validates the resulting
+session, and stores it encrypted. Application secrets exist only in the encrypted temporary
+state and are deleted when consumed. Angel One's publisher flow returns its session token
+directly and does not require an API secret in the start request.
+
+Groww uses its documented API-key approval or TOTP token endpoint instead of a redirect:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/brokers/groww/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"api_key":"your-groww-key","totp":"123456"}'
+```
+
+The direct `/connect` endpoint remains available for mock mode, manually generated daily
+tokens, and sandbox testing. The backend never collects a broker account password. Angel One
+deployments may also require the broker's current network identity/static-IP configuration.
 
 The implementations use the brokers' documented REST contracts rather than a normalization
 library. This keeps payload translation visible for review, avoids placing a community
@@ -184,6 +217,9 @@ included in API responses or application logs.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/v1/brokers` | Adapter/connection status |
+| `POST` | `/api/v1/brokers/{broker}/auth/start` | Create broker-hosted login URL and state |
+| `GET` | `/api/v1/brokers/{broker}/auth/callback` | Validate state and exchange login code |
+| `POST` | `/api/v1/brokers/groww/auth/token` | Generate and validate a Groww session |
 | `POST` | `/api/v1/brokers/{broker}/connect` | Validate and encrypt a broker session |
 | `DELETE` | `/api/v1/brokers/{broker}/connection` | Remove a connection |
 | `POST` | `/api/v1/executions` | Plan and execute a portfolio request |
@@ -223,13 +259,14 @@ pytest -q
 
 Coverage includes delta calculation, no-op portfolios, explicit rebalance behavior,
 oversell/duplicate validation, sell-before-buy ordering, idempotency, encrypted credentials,
-rate-limit retry, partial failure, connection enforcement, and health checks.
+rate-limit retry, partial failure, terminal-status polling, single-use OAuth state, broker
+token exchange, automatic instrument resolution, connection enforcement, and health checks.
 
 ## Deliberate limitations
 
 - Live adapters are contract implementations, not claims of credentialed end-to-end
   certification. Actual accounts, subscriptions, exchange permissions, IP registration,
-  depository authorization, and market-hours behavior are outside this repository.
+  depository authorization, and market-hours behavior require the submitter's broker accounts.
 - The prototype executes synchronously so the assignment flow is easy to inspect. Production
   execution should use durable jobs/outbox events and reconciliation workers.
 - Only delivery market orders are modeled. Limit orders, funds/margin preflight, price bands,
@@ -243,4 +280,3 @@ rate-limit retry, partial failure, connection enforcement, and health checks.
 The requested 1,000–1,500-word technical design, including point-in-time fundamentals,
 retention, live and historical compute, APIs, caching, and diagrams, is in
 [`docs/financial-data-platform.md`](docs/financial-data-platform.md).
-

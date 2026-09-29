@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
 from app.brokers.base import (
+    BrokerAdapter,
     BrokerError,
     BrokerRateLimitError,
     BrokerTransientError,
@@ -11,6 +13,7 @@ from app.brokers.base import (
 from app.brokers.factory import BrokerFactory
 from app.database import Database
 from app.domain import (
+    BrokerOrderResult,
     ExecutionRequest,
     ExecutionResult,
     ExecutionStatus,
@@ -34,11 +37,15 @@ class ExecutionEngine:
         broker_factory: BrokerFactory,
         notifier: NotificationService,
         max_attempts: int = 3,
+        poll_interval_seconds: float = 1.0,
+        poll_timeout_seconds: float = 20.0,
     ) -> None:
         self.database = database
         self.broker_factory = broker_factory
         self.notifier = notifier
         self.max_attempts = max(1, max_attempts)
+        self.poll_interval_seconds = max(0.01, poll_interval_seconds)
+        self.poll_timeout_seconds = max(self.poll_interval_seconds, poll_timeout_seconds)
 
     async def execute(self, request: ExecutionRequest, idempotency_key: str) -> ExecutionResult:
         previous = self.database.get_by_idempotency_key(idempotency_key)
@@ -87,9 +94,7 @@ class ExecutionEngine:
             return result
 
         results = [await self._place_with_retry(broker, order) for order in plan]
-        successful = sum(
-            item.status in {OrderStatus.ACCEPTED, OrderStatus.COMPLETE} for item in results
-        )
+        successful = sum(item.status == OrderStatus.COMPLETE for item in results)
         if successful == len(results):
             status = ExecutionStatus.COMPLETED
         elif successful:
@@ -110,20 +115,18 @@ class ExecutionEngine:
         await self.notifier.send(result)
         return result
 
-    async def _place_with_retry(self, broker, order: PlannedOrder) -> OrderResult:
+    async def _place_with_retry(
+        self, broker: BrokerAdapter, order: PlannedOrder
+    ) -> OrderResult:
         attempts = 0
         while attempts < self.max_attempts:
             attempts += 1
             try:
                 placed = await broker.place_order(order)
                 if placed.status == OrderStatus.ACCEPTED and placed.broker_order_id:
-                    try:
-                        checked = await broker.get_order_status(placed.broker_order_id)
-                        if checked.status != OrderStatus.UNKNOWN:
-                            placed = checked
-                    except BrokerError:
-                        # An accepted order remains accepted if status polling fails.
-                        pass
+                    placed = await self._await_terminal_status(
+                        broker, placed.broker_order_id, placed
+                    )
                 return OrderResult(
                     symbol=order.symbol,
                     exchange=order.exchange,
@@ -143,6 +146,42 @@ class ExecutionEngine:
             except Exception as exc:  # keep one malformed order from aborting the batch
                 return self._failed(order, attempts, f"Unexpected broker error: {exc}")
         return self._failed(order, attempts, "Order attempts exhausted")
+
+    async def _await_terminal_status(
+        self,
+        broker: BrokerAdapter,
+        order_id: str,
+        placed: BrokerOrderResult,
+    ) -> BrokerOrderResult:
+        deadline = time.monotonic() + self.poll_timeout_seconds
+        last = placed
+        while time.monotonic() < deadline:
+            try:
+                checked = await broker.get_order_status(order_id)
+                if checked.status in {OrderStatus.COMPLETE, OrderStatus.REJECTED}:
+                    return checked
+                if checked.status != OrderStatus.UNKNOWN:
+                    last = checked
+            except (BrokerRateLimitError, BrokerTransientError):
+                # Status reads are safe to retry; order placement is never repeated here.
+                pass
+            except BrokerError as exc:
+                return last.model_copy(
+                    update={
+                        "status": OrderStatus.UNKNOWN,
+                        "message": f"Order accepted but status lookup failed: {exc}",
+                    }
+                )
+            await asyncio.sleep(self.poll_interval_seconds)
+        return last.model_copy(
+            update={
+                "status": OrderStatus.UNKNOWN,
+                "message": (
+                    "Order was accepted but did not reach a terminal status before the "
+                    "polling deadline; reconcile with the broker before retrying"
+                ),
+            }
+        )
 
     @staticmethod
     def _failed(order: PlannedOrder, attempts: int, message: str) -> OrderResult:

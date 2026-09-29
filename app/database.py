@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS executions (
 
 CREATE INDEX IF NOT EXISTS idx_executions_created_at
 ON executions(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS broker_auth_states (
+    state TEXT PRIMARY KEY,
+    broker TEXT NOT NULL,
+    encrypted_config TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT
+);
 """
 
 
@@ -94,6 +102,37 @@ class Database:
             )
             self.connection.commit()
         return cursor.rowcount > 0
+
+    def save_auth_state(
+        self, *, state: str, broker: str, encrypted_config: str, expires_at: str
+    ) -> None:
+        with self._lock:
+            self.connection.execute(
+                """
+                INSERT INTO broker_auth_states(state, broker, encrypted_config, expires_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (state, broker, encrypted_config, expires_at),
+            )
+            self.connection.commit()
+
+    def consume_auth_state(self, state: str, broker: str) -> tuple[str, str] | None:
+        """Atomically consume an OAuth state to prevent callback replay."""
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT encrypted_config, expires_at FROM broker_auth_states
+                WHERE state = ? AND broker = ? AND consumed_at IS NULL
+                """,
+                (state, broker),
+            ).fetchone()
+            if not row:
+                return None
+            # Delete the row so application secrets are not retained after the one-time
+            # callback and the same state can never be replayed.
+            self.connection.execute("DELETE FROM broker_auth_states WHERE state = ?", (state,))
+            self.connection.commit()
+        return str(row["encrypted_config"]), str(row["expires_at"])
 
     def create_execution(
         self,

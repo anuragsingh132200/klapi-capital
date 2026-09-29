@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import router
+from app.broker_auth import BrokerAuthService
 from app.brokers.factory import BrokerFactory
 from app.config import Settings
 from app.database import Database
@@ -27,19 +28,32 @@ def create_app(*, database_path: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if (
+            settings.enable_live_trading
+            and settings.encryption_secret == "development-only-change-me"
+        ):
+            raise RuntimeError(
+                "ENCRYPTION_SECRET must be changed before live trading can be enabled"
+            )
         database = Database(settings.database_path)
         database.initialize()
         vault = CredentialVault(settings.encryption_secret)
         broker_factory = BrokerFactory(database, vault, settings)
+        broker_auth = BrokerAuthService(
+            database, vault, timeout=settings.broker_timeout_seconds
+        )
         notifier = NotificationService(settings.webhook_url)
         app.state.settings = settings
         app.state.database = database
         app.state.broker_factory = broker_factory
+        app.state.broker_auth = broker_auth
         app.state.engine = ExecutionEngine(
             database,
             broker_factory,
             notifier,
             max_attempts=settings.max_order_attempts,
+            poll_interval_seconds=settings.order_poll_interval_seconds,
+            poll_timeout_seconds=settings.order_poll_timeout_seconds,
         )
         yield
         await broker_factory.close()
@@ -78,4 +92,3 @@ def create_app(*, database_path: str | None = None) -> FastAPI:
 
 
 app = create_app()
-

@@ -137,7 +137,7 @@ class ExecutionResult(BaseModel):
 
     @property
     def successful_orders(self) -> int:
-        return sum(o.status in {OrderStatus.ACCEPTED, OrderStatus.COMPLETE} for o in self.orders)
+        return sum(o.status == OrderStatus.COMPLETE for o in self.orders)
 
 
 class BrokerConnectionRequest(BaseModel):
@@ -150,3 +150,29 @@ class BrokerConnectionResponse(BaseModel):
     connected: bool
     message: str
 
+
+class BrokerAuthStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str = Field(min_length=1)
+    api_secret: str | None = None
+    redirect_uri: str = Field(min_length=8)
+
+
+class BrokerAuthStartResponse(BaseModel):
+    broker: BrokerName
+    authorization_url: str
+    state: str
+    expires_at: datetime
+
+
+class GrowwTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str = Field(min_length=1)
+    api_secret: str | None = None
+    totp: str | None = None
+
+    @model_validator(mode="after")
+    def validate_auth_method(self) -> "GrowwTokenRequest":
+        if bool(self.api_secret) == bool(self.totp):
+            raise ValueError("Provide exactly one of api_secret or totp")
+        return self
