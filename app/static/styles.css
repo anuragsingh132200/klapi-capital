@@ -1,0 +1,39 @@
+:root {
+  color-scheme: dark;
+  --bg: #07110f;
+  --panel: #10201c;
+  --panel-2: #142923;
+  --line: #254239;
+  --ink: #edf7f2;
+  --muted: #94ada3;
+  --green: #71e5ae;
+  --red: #ff8f8f;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(circle at 20% 0, #17372d 0, var(--bg) 34rem); color: var(--ink); }
+main { width: min(1040px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0; }
+header, .section-title, .connection, .actions { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+h1 { font-size: clamp(2.3rem, 6vw, 4.7rem); letter-spacing: -.055em; line-height: .98; max-width: 760px; margin: 8px 0 16px; }
+h2 { margin: 0 0 7px; font-size: 1.15rem; }
+p { margin: 0; color: var(--muted); }
+.eyebrow { color: var(--green); font-weight: 800; letter-spacing: .18em; font-size: .72rem; }
+.sub { font-size: 1.05rem; }
+.panel { background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: 18px; margin-top: 24px; padding: 24px; box-shadow: 0 22px 60px #0004; }
+.badge { border: 1px solid #477462; border-radius: 999px; padding: 7px 12px; white-space: nowrap; color: var(--green); background: #18352b; font-size: .78rem; font-weight: 700; }
+.badge.neutral { color: var(--muted); background: #17241f; border-color: var(--line); }
+label { display: grid; gap: 7px; color: var(--muted); font-size: .8rem; }
+button, select { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; color: var(--ink); background: var(--panel-2); font: inherit; cursor: pointer; }
+button:hover { border-color: var(--green); }
+.primary { background: var(--green); color: #062017; border-color: var(--green); font-weight: 800; }
+.secondary { color: var(--muted); }
+textarea { width: 100%; min-height: 265px; resize: vertical; margin: 20px 0; border: 1px solid var(--line); border-radius: 12px; background: #081511; color: #bdebd7; padding: 18px; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.actions { justify-content: flex-end; }
+.empty { color: var(--muted); padding: 30px 0 10px; text-align: center; }
+table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+th, td { padding: 13px 8px; border-bottom: 1px solid var(--line); text-align: left; font-size: .88rem; }
+th { color: var(--muted); font-weight: 500; }
+.BUY { color: var(--green); } .SELL, .FAILED, .REJECTED { color: var(--red); }
+@media (max-width: 700px) { header, .section-title, .connection { align-items: stretch; flex-direction: column; } main { padding-top: 32px; } }
+

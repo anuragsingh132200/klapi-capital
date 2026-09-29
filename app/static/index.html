@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kalpi Execution Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">KALPI CAPITAL</p>
+          <h1>Portfolio execution console</h1>
+          <p class="sub">Plan, execute, and audit broker-neutral portfolio trades.</p>
+        </div>
+        <span id="connectionBadge" class="badge">Not connected</span>
+      </header>
+
+      <section class="panel connection">
+        <div>
+          <h2>1. Connect a broker</h2>
+          <p>The demo broker is deterministic and never sends a real trade.</p>
+        </div>
+        <label>
+          Broker
+          <select id="broker">
+            <option value="mock">Mock broker</option>
+            <option value="zerodha">Zerodha</option>
+            <option value="fyers">FYERS</option>
+            <option value="angelone">Angel One</option>
+            <option value="groww">Groww</option>
+            <option value="upstox">Upstox</option>
+          </select>
+        </label>
+        <button id="connect">Connect demo</button>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">
+          <div>
+            <h2>2. Define the execution</h2>
+            <p>Use a target state or explicit rebalance instructions.</p>
+          </div>
+          <select id="mode">
+            <option value="FIRST_TIME">Target portfolio</option>
+            <option value="REBALANCE">Explicit rebalance</option>
+          </select>
+        </div>
+        <textarea id="payload" spellcheck="false"></textarea>
+        <div class="actions">
+          <button id="reset" class="secondary">Load example</button>
+          <button id="execute" class="primary">Execute portfolio</button>
+        </div>
+      </section>
+
+      <section class="panel results">
+        <div class="section-title">
+          <div>
+            <h2>3. Execution result</h2>
+            <p id="resultMeta">No execution submitted yet.</p>
+          </div>
+          <span id="resultStatus" class="badge neutral">Waiting</span>
+        </div>
+        <div id="orders" class="empty">Orders will appear here.</div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
+
